@@ -1,4 +1,4 @@
-name: Build & Sign TV Bro (Release)
+name: Build & Sign TV Bro (genericRelease)
 
 on:
   workflow_dispatch:
@@ -20,21 +20,11 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      - name: Gradle perms
+      - name: Make gradlew executable
         run: chmod +x gradlew
 
-      # Compila todas las variantes de release que tenga el módulo app
-      - name: Build release
-        run: ./gradlew :app:assembleRelease
-
-      # Mostrar qué APKs se generaron (útil para verificar nombres/rutas)
-      - name: List generated APKs
-        run: |
-          echo "===== APKs encontrados ====="
-          find app/build/outputs/apk -type f -name "*release*.apk" -printf "%p\n" | sort -V || true
-
-      # Keystore efímero (para no usar Secrets)
-      - name: Generate ephemeral release keystore
+      # 1) Generar keystore efímero para la firma de "release"
+      - name: Generate release keystore
         run: |
           keytool -genkeypair -v \
             -keystore release.jks \
@@ -44,36 +34,38 @@ jobs:
             -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=TVBro, OU=PRL, O=PRL, L=Arequipa, ST=Arequipa, C=PE"
 
-      # Firma el universal si existe; si no, arm64; si no, el primero
-      - name: Sign release APK(s)
-        shell: bash
+      # 2) Definir propiedades de firma + memoria para Gradle (leídas por app/build.gradle)
+      - name: Write gradle.properties (signing + memory)
         run: |
-          set -e
-          BT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n1)"
-          mapfile -t APKS < <(find app/build/outputs/apk -type f -name "*release*.apk" | sort -V)
+          cat > gradle.properties << 'EOF'
+          # Firma de release (usada por signingConfigs.release en app/build.gradle)
+          RELEASE_STORE_FILE=release.jks
+          RELEASE_STORE_PASSWORD=123456
+          RELEASE_KEY_ALIAS=release
+          RELEASE_KEY_PASSWORD=123456
 
-          if [ ${#APKS[@]} -eq 0 ]; then
-            echo "No se encontraron APKs de release"; exit 1
-          fi
+          # Memoria extra para Gradle/Kotlin/Lint
+          org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8
+          kotlin.daemon.jvmargs=-Xmx2g
+          org.gradle.daemon=true
+          org.gradle.parallel=true
+          org.gradle.configureondemand=true
+          EOF
 
-          # Elegir preferencia
-          TARGET=""
-          for a in "${APKS[@]}"; do [[ "$a" == *"universal"* ]] && TARGET="$a" && break; done
-          if [ -z "$TARGET" ]; then
-            for a in "${APKS[@]}"; do [[ "$a" == *"arm64-v8a"* ]] && TARGET="$a" && break; done
-          fi
-          [ -z "$TARGET" ] && TARGET="${APKS[0]}"
+      # 3) Compilar SOLO genericRelease para evitar el flavor fossRelease que fallaba
+      - name: Build genericRelease
+        run: ./gradlew :app:assembleGenericRelease --no-daemon
 
-          echo "APK elegido para firmar: $TARGET"
-          SIGNED="${TARGET%.apk}-signed.apk"
-          cp "$TARGET" "$SIGNED"
-          "$BT/apksigner" sign --ks release.jks --ks-pass pass:123456 --key-pass pass:123456 --ks-key-alias release "$SIGNED"
-          "$BT/apksigner" verify "$SIGNED"
+      # 4) Listar APKs generados para verificar rutas
+      - name: List generated APKs
+        run: |
+          echo "===== APKs ====="
+          find app/build/outputs/apk -type f -name "*generic*release*.apk" -printf "%p\n" | sort -V || true
 
-          echo "SIGNED_APK=$SIGNED" >> $GITHUB_ENV
-
-      - name: Upload SIGNED APK
+      # 5) Subir el/los APK firmados por Gradle (ya quedan firmados con el keystore efímero)
+      - name: Upload signed APK(s)
         uses: actions/upload-artifact@v4
         with:
-          name: tvbro-release-signed
-          path: ${{ env.SIGNED_APK }}
+          name: tvbro-generic-release-signed
+          path: |
+            app/build/outputs/apk/generic/release/*.apk
