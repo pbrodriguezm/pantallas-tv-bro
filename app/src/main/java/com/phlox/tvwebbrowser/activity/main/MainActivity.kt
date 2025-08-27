@@ -123,7 +123,18 @@ open class MainActivity : AppCompatActivity(), ActionBar.Callback {
         uiHandler = Handler()
         prefs = getSharedPreferences(TVBro.MAIN_PREFS_NAME, Context.MODE_PRIVATE)
         vb = ActivityMainBinding.inflate(layoutInflater)
+        // evita que la pantalla se apague mientras la app esté visible
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
         setContentView(vb.root)
+        
+        // modo inmersivo (oculta status y nav bars; se muestran con swipe y vuelven a ocultarse)
+        val insets = WindowCompat.getInsetsController(window, window.decorView)
+        insets.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        insets.hide(WindowInsetsCompat.Type.systemBars())
+
+        
 
         vb.ivMiniatures.visibility = View.INVISIBLE
         vb.llBottomPanel.visibility = View.INVISIBLE
@@ -237,6 +248,17 @@ open class MainActivity : AppCompatActivity(), ActionBar.Callback {
         loadState()
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            val insets = WindowCompat.getInsetsController(window, window.decorView)
+            insets.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            insets.hide(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    
     private var progressBarHideRunnable: Runnable = Runnable {
         val anim = AnimationUtils.loadAnimation(this@MainActivity, android.R.anim.fade_out)
         anim.setAnimationListener(object : BaseAnimationListener() {
