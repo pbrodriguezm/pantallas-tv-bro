@@ -23,19 +23,17 @@ jobs:
       - name: Gradle perms
         run: chmod +x gradlew
 
-      # (Opcional) Si aún no agregaste estas features en el Manifest para TV, descomenta:
-      # - name: Patch Manifest for TV (optional)
-      #   shell: bash
-      #   run: |
-      #     MANIFEST="app/src/main/AndroidManifest.xml"
-      #     if ! grep -q 'android.hardware.touchscreen' "$MANIFEST"; then
-      #       awk '1;/<manifest>/{print "    <uses-feature android:name=\"android.hardware.touchscreen\" android:required=\"false\"/>\n    <uses-feature android:name=\"android.software.leanback\" android:required=\"false\"/>"}' "$MANIFEST" > tmp.xml
-      #       mv tmp.xml "$MANIFEST"
-      #     fi
+      # Compila todas las variantes de release que tenga el módulo app
+      - name: Build release
+        run: ./gradlew :app:assembleRelease
 
-      - name: Build Github Release
-        run: ./gradlew :app:assembleGithubRelease
+      # Mostrar qué APKs se generaron (útil para verificar nombres/rutas)
+      - name: List generated APKs
+        run: |
+          echo "===== APKs encontrados ====="
+          find app/build/outputs/apk -type f -name "*release*.apk" -printf "%p\n" | sort -V || true
 
+      # Keystore efímero (para no usar Secrets)
       - name: Generate ephemeral release keystore
         run: |
           keytool -genkeypair -v \
@@ -46,32 +44,32 @@ jobs:
             -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=TVBro, OU=PRL, O=PRL, L=Arequipa, ST=Arequipa, C=PE"
 
-      - name: Sign release (prefer universal, fallback arm64)
+      # Firma el universal si existe; si no, arm64; si no, el primero
+      - name: Sign release APK(s)
         shell: bash
         run: |
           set -e
           BT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n1)"
-          OUT="app/build/outputs/apk/github/release"
-          # Ajusta los patrones si tu salida cambia
-          APK_UNI=$(ls "$OUT"/*-universal-*-release*.apk 2>/dev/null || true)
-          APK_ARM64=$(ls "$OUT"/*-arm64-v8a-*-release*.apk 2>/dev/null || true)
-          TARGET=""
-          if [ -n "$APK_UNI" ]; then TARGET="$APK_UNI"; fi
-          if [ -z "$TARGET" ] && [ -n "$APK_ARM64" ]; then TARGET="$APK_ARM64"; fi
-          if [ -z "$TARGET" ]; then
-            echo "No se encontró APK universal ni arm64 en $OUT"
-            ls -la "$OUT" || true
-            exit 1
+          mapfile -t APKS < <(find app/build/outputs/apk -type f -name "*release*.apk" | sort -V)
+
+          if [ ${#APKS[@]} -eq 0 ]; then
+            echo "No se encontraron APKs de release"; exit 1
           fi
+
+          # Elegir preferencia
+          TARGET=""
+          for a in "${APKS[@]}"; do [[ "$a" == *"universal"* ]] && TARGET="$a" && break; done
+          if [ -z "$TARGET" ]; then
+            for a in "${APKS[@]}"; do [[ "$a" == *"arm64-v8a"* ]] && TARGET="$a" && break; done
+          fi
+          [ -z "$TARGET" ] && TARGET="${APKS[0]}"
+
+          echo "APK elegido para firmar: $TARGET"
           SIGNED="${TARGET%.apk}-signed.apk"
           cp "$TARGET" "$SIGNED"
-          "$BT/apksigner" sign \
-            --ks release.jks \
-            --ks-pass pass:123456 \
-            --key-pass pass:123456 \
-            --ks-key-alias release \
-            "$SIGNED"
+          "$BT/apksigner" sign --ks release.jks --ks-pass pass:123456 --key-pass pass:123456 --ks-key-alias release "$SIGNED"
           "$BT/apksigner" verify "$SIGNED"
+
           echo "SIGNED_APK=$SIGNED" >> $GITHUB_ENV
 
       - name: Upload SIGNED APK
